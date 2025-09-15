@@ -187,7 +187,7 @@ export async function calculateMinPrice(price: number): Promise<number> {
 export async function calculateFixtureRating(
   playerId: number,
   gameData: GameData,
-  upcomingGameweeks: number = 5,
+  upcomingGameweeks: number = 6,
 ): Promise<number> {
   const MAX_RATING = 5;
   const DEFAULT_RATING = 3;
@@ -226,7 +226,10 @@ export async function calculateFixtureRating(
   return Math.round(Math.min(Math.max(normalizedRating, MIN_RATING), MAX_RATING) * 100) / 100;
 }
 
-export async function calculateExpectedGoalsRating(playerId: number,  gameData: GameData,): Promise<number> {
+export async function calculateExpectedGoalsRating(
+  playerId: number,
+  gameData: GameData,
+): Promise<number> {
   // Constants for normalization
   const MIN_EXPECTED_GOALS = 0; // Minimum expected goals or involvements
   const MAX_EXPECTED_GOALS = 1; // Maximum expected goals or involvements per 90 minutes
@@ -234,49 +237,54 @@ export async function calculateExpectedGoalsRating(playerId: number,  gameData: 
   const MAX_EXPECTED_CONCEDED = 2; // Maximum expected goals conceded per 90 minutes
 
   if (gameData) {
-    
+    try {
+      // Retrieve player details
+      const element = gameData.elements.find((x) => x.id == playerId);
 
-  try {
-    // Retrieve player details
-    const element = gameData.elements.find((x) => x.id == playerId);
+      if (!element) {
+        throw new Error('Player details not found');
+      }
 
-    if (!element) {
-      throw new Error('Player details not found');
+      // Determine the metric to use based on the player's position
+      let rawRating: number;
+      if (element.element_type === 1) {
+        // GK: Use expectedGoalsConcededPer90 (lower is better)
+        rawRating = element.expected_goals_conceded_per_90;
+        // Normalize the rating (lower is better, so invert the scale)
+        return Math.round(
+          (1 -
+            (rawRating - MIN_EXPECTED_CONCEDED) / (MAX_EXPECTED_CONCEDED - MIN_EXPECTED_CONCEDED)) *
+            100,
+        );
+      } else if (element.element_type === 2) {
+        // DEF: Combine expectedGoalsConcededPer90 (defensive) and expected_goal_involvements_per_90 (attacking)
+        // We'll average the normalized defensive and attacking ratings
+        const defRating =
+          1 -
+          (element.expected_goals_conceded_per_90 - MIN_EXPECTED_CONCEDED) /
+            (MAX_EXPECTED_CONCEDED - MIN_EXPECTED_CONCEDED);
+        const attRating =
+          (element.expected_goal_involvements_per_90 - MIN_EXPECTED_GOALS) /
+          (MAX_EXPECTED_GOALS - MIN_EXPECTED_GOALS);
+        const combined = defRating + attRating; // Weighting attacking slightly higher
+        return Math.round(combined * 100);
+      } else if (element.element_type === 3 || element.element_type === 4) {
+        // MID/FWD: Use expectedGoalInvolvementsPer90 (higher is better)
+        rawRating = element.expected_goal_involvements_per_90;
+        return Math.round(
+          ((rawRating - MIN_EXPECTED_GOALS) / (MAX_EXPECTED_GOALS - MIN_EXPECTED_GOALS)) * 100,
+        );
+      } else {
+        // If the position is unknown, return a default rating of 0
+        return 0;
+      }
+    } catch (error) {
+      console.error(`Error calculating Expected Goals Rating for player ${playerId}:`, error);
+      return 0; // Return 0 in case of an error
     }
-
-    // Determine the metric to use based on the player's position
-    let rawRating: number;
-    if (element.element_type === 1 || element.element_type === 2) {
-      // Use expectedGoalsConcededPer90 for GK and DEF
-      rawRating = element.expected_goals_conceded_per_90;
-
-      // Normalize the rating (lower is better, so invert the scale)
-      return Math.round(
-        (1 -
-          (rawRating - MIN_EXPECTED_CONCEDED) / (MAX_EXPECTED_CONCEDED - MIN_EXPECTED_CONCEDED)) *
-          100,
-      );
-    } else if (element.element_type === 3 || element.element_type === 4) {
-
-      // Use expectedGoalInvolvementsPer90 for MID and FWD
-      rawRating = element.expected_goal_involvements_per_90;
-
-      // Normalize the rating (higher is better)
-      return Math.round(
-        ((rawRating - MIN_EXPECTED_GOALS) / (MAX_EXPECTED_GOALS - MIN_EXPECTED_GOALS)) * 100,
-      );
-    } else {
-      // If the position is unknown, return a default rating of 0
-      return 0;
-    }
-  
-  } catch (error) {
-    console.error(`Error calculating Expected Goals Rating for player ${playerId}:`, error);
-    return 0; // Return 0 in case of an error
   }
-}
 
-return 0;
+  return 0;
 }
 
 /**
@@ -293,6 +301,7 @@ return 0;
  * @param price - The player's price (e.g., in millions).
  * @param formRating - The player's form rating, which reflects recent performance.
  * @param fixtureRating - The player's fixture rating, which reflects the difficulty of upcoming fixtures.
+ * @param expectedGoalsRating - The player's expected goals rating, which reflects their goal-scoring/goal-conceding potential.
  * @returns A promise that resolves to the calculated "In Form" score, normalized to a scale of 1-100.
  */
 export async function calculateInFormScore(
@@ -324,9 +333,9 @@ export async function calculateInFormScore(
 
   // Weights for each factor (adjust these based on importance)
   const PRICE_WEIGHT = 0.2;
-  const FORM_WEIGHT = 0.5;
+  const FORM_WEIGHT = 0.6;
   const FIXTURE_WEIGHT = 0.3;
-  const XG_WEIGHT = 0.1;
+  const XG_WEIGHT = 0.3;
 
   // Calculate the weighted player rating
   const rawPlayerRating =
@@ -337,6 +346,8 @@ export async function calculateInFormScore(
 
   // Normalize the player rating to a scale of 1-100
   const normalizedPlayerRating = Math.round(rawPlayerRating * 100);
+
+  // console.log(`In Form Score: ${normalizedPlayerRating} (Price: ${normalizedPrice * PRICE_WEIGHT}, Form: ${normalizedFormRating * FORM_WEIGHT}, Fixture: ${normalizedFixtureRating * FIXTURE_WEIGHT}, XG: ${normalizedXGRating * XG_WEIGHT})`);
 
   return normalizedPlayerRating;
 }
